@@ -15,7 +15,7 @@ class SignUpSheetController < ApplicationController
   require 'rgl/dot'
   require 'rgl/topsort'
 
-  def action_allowed?
+  def is_action_permitted?
     case params[:action]
     when 'set_priority', 'sign_up', 'delete_signup', 'list', 'show_team', 'switch_original_topic_to_approved_suggested_topic', 'publish_approved_suggested_topic'
       (current_user_has_student_privileges? &&
@@ -36,7 +36,7 @@ class SignUpSheetController < ApplicationController
   verify method: :post, only: %i[destroy create update],
          redirect_to: { action: :list }
 
-  def controller_locale
+  def set_locale_for_student
     locale_for_student
   end
 
@@ -55,9 +55,9 @@ class SignUpSheetController < ApplicationController
   def create
     topic = SignUpTopic.where(topic_name: params[:topic][:topic_name], assignment_id: params[:id]).first
     if topic.nil?
-      setup_new_topic
+      initialize_new_sign_up_topic
     else
-      update_existing_topic topic
+      update_sign_up_topic topic
     end
   end
 
@@ -137,7 +137,7 @@ class SignUpSheetController < ApplicationController
   # Contains links that let an admin or Instructor edit, delete, view enrolled/waitlisted members for each topic
   # Also contains links to delete topics and modify the deadlines for individual topics. Staggered means that different topics can have different deadlines.
   def add_signup_topics
-    load_add_signup_topics(params[:id])
+    load_sign_up_topics_for_assignment(params[:id])
     SignUpSheet.add_signup_topic(params[:id])
   end
 
@@ -146,7 +146,7 @@ class SignUpSheetController < ApplicationController
   end
 
   # retrieves all the data associated with the given assignment. Includes all topics,
-  def load_add_signup_topics(assignment_id)
+  def load_sign_up_topics_for_assignment(assignment_id)
     @id = assignment_id
     @sign_up_topics = SignUpTopic.where('assignment_id = ?', assignment_id)
     @slots_filled = SignUpTopic.find_slots_filled(assignment_id)
@@ -161,7 +161,7 @@ class SignUpSheetController < ApplicationController
   end
 
 
-  def set_values_for_new_topic
+  def initialize_new_sign_up_topic
     @sign_up_topic = SignUpTopic.new
     @sign_up_topic.topic_identifier = params[:topic][:topic_identifier]
     @sign_up_topic.topic_name = params[:topic][:topic_name]
@@ -185,48 +185,55 @@ class SignUpSheetController < ApplicationController
   end
 
   def list
+    #fetch the participant and related assignment
     @participant = AssignmentParticipant.find(params[:id].to_i)
-    @assignment = @participant.assignment
-    @slots_filled = SignUpTopic.find_slots_filled(@assignment.id)
-    @slots_waitlisted = SignUpTopic.find_slots_waitlisted(@assignment.id)
+    assignment_details = fetch_assignment_details(@participant)
+    @assignment = assignment_details[:assignment]
+
+    #retrieve slot information
+    @slots_filled = assignment_details[:slots_filled]
+    @slots_waitlisted = assignment_details[:slots_waitlisted]
+
+
     @show_actions = true
     @priority = 0
-    @sign_up_topics = SignUpTopic.where(assignment_id: @assignment.id, private_to: nil)
-    @max_team_size = @assignment.max_team_size
+    @sign_up_topics = assignment_details[:sign_up_topics]
+    @max_team_size = assignment_details[:max_team_size]
     team_id = @participant.team.try(:id)
-    @use_bookmark = @assignment.use_bookmark
+    @use_bookmark = assignment_details[:use_bookmark]
 
+    #If the assignment is intelligent, get topics based on biding
     if @assignment.is_intelligent
       @bids = team_id.nil? ? [] : Bid.where(team_id: team_id).order(:priority)
+      #Collect all sign up topics based on bids
       signed_up_topics = []
       @bids.each do |bid|
         sign_up_topic = SignUpTopic.find_by(id: bid.topic_id)
         signed_up_topics << sign_up_topic if sign_up_topic
       end
+      #Filter and update signup topic list
       signed_up_topics &= @sign_up_topics
       @sign_up_topics -= signed_up_topics
       @bids = signed_up_topics
     end
 
+    #Calculating the size of sign up topic list
     @num_of_topics = @sign_up_topics.size
-    @signup_topic_deadline = @assignment.due_dates.find_by(deadline_type_id: 7)
-    @drop_topic_deadline = @assignment.due_dates.find_by(deadline_type_id: 6)
+
+    #Storing deadline information
+    deadlines = fetch_deadlines(@assignment)
+    @signup_topic_deadline = deadlines[:signup_topic_deadline]
+    @drop_topic_deadline = deadlines[:drop_topic_deadline]
+
     @student_bids = team_id.nil? ? [] : Bid.where(team_id: team_id)
 
-    unless @assignment.due_dates.find_by(deadline_type_id: 1).nil?
-      @show_actions = false if !@assignment.staggered_deadline? && (@assignment.due_dates.find_by(deadline_type_id: 1).due_at < Time.now)
+    #Handle topic sign up restrictions based on dealines
+    @show_actions = false if set_action_display_status(@assignment)
 
-      # Find whether the user has signed up for any topics; if so the user won't be able to
-      # sign up again unless the former was a waitlisted topic
-      # if team assignment, then team id needs to be passed as parameter else the user's id
-      users_team = Team.find_team_users(@assignment.id, session[:user].id)
-      @selected_topics = if users_team.empty?
-                           nil
-                         else
-                           SignedUpTeam.find_user_signup_topics(@assignment.id, users_team.first.t_id)
-                         end
-    end
+    @selected_topics = user_sign_up_status(@assignment, session[:user].id)
+    
     render('sign_up_sheet/intelligent_topic_selection') && return if @assignment.is_intelligent
+    
   end
 
   def sign_up
@@ -456,8 +463,8 @@ class SignUpSheetController < ApplicationController
 
   private
 
-  def setup_new_topic
-    set_values_for_new_topic
+  def initialize_new_sign_up_topic
+    initialize_new_sign_up_topic
     @sign_up_topic.micropayment = params[:topic][:micropayment] if @assignment.microtask?
     if @sign_up_topic.save
       undo_link "The topic: \"#{@sign_up_topic.topic_name}\" has been created successfully. "
@@ -467,7 +474,7 @@ class SignUpSheetController < ApplicationController
     end
   end
 
-  def update_existing_topic(topic)
+  def update_sign_up_topic(topic)
     topic.topic_identifier = params[:topic][:topic_identifier]
     update_max_choosers(topic)
     topic.category = params[:topic][:category]
