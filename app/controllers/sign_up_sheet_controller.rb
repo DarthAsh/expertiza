@@ -248,36 +248,23 @@ class SignUpSheetController < ApplicationController
   # renamed from signup_as_instructor to select_student_for_signup for better clarity
   def select_student_for_signup; end
 
-  #Method that implements 
+  #Method that implements the signup as instructor functionality. If the specified user is found then proceeds to sign up the user
+  #Otherwise redirects to the assignment edit page
   def signup_as_instructor_action
   user = User.find_by(name: params[:username])
 
-  # Check if the user is nil (i.e., user not found in the database)
-  # If user is nil, display an error message to the user indicating the student does not exist
-  # Log the information for debugging or tracking purposes
-  # Redirect the user back to the 'edit' page of the current assignment
   if user.nil?
     flash[:error] = 'That student does not exist!'
     ExpertizaLogger.info LoggerMessage.new(controller_name, '', 'Student does not exist')
     return redirect_to controller: 'assignments', action: 'edit', id: params[:assignment_id]
   end
 
-  # Check if there is an AssignmentParticipant record with the given user ID and assignment ID
-  # If no such record exists, display an error message indicating the student is not registered for the assignment
-  # Log this information for debugging or tracking purposes, including the user ID
-  # Redirect the user back to the 'edit' page of the current assignment
   unless AssignmentParticipant.exists?(user_id: user.id, parent_id: params[:assignment_id])
     flash[:error] = 'The student is not registered for the assignment!'
     ExpertizaLogger.info LoggerMessage.new(controller_name, '', "Student is not registered for the assignment: #{user.id}")
     return redirect_to controller: 'assignments', action: 'edit', id: params[:assignment_id]
   end
 
-  # Attempt to sign up the student for the specified topic using the signup_team method
-  # If successful, display a success message indicating the student has been signed up for the topic
-  # Log the action for tracking, including the topic ID
-  # If the signup fails (e.g., the student is already signed up for a topic), display an error message
-  # Log this information for tracking purposes
-  # Redirect the user back to the 'edit' page of the current assignment
   if SignUpSheet.signup_team(params[:assignment_id], user.id, params[:topic_id])
     flash[:success] = 'You have successfully signed up the student for the topic!'
     ExpertizaLogger.info LoggerMessage.new(controller_name, '', "Instructor signed up student for topic: #{params[:topic_id]}")
@@ -346,13 +333,11 @@ end
       team_id = participant.team.try(:id)
     end
     if params[:topic].nil?
-      # All topics are deselected by current team
+     
       Bid.where(team_id: team_id).destroy_all
     else
       @bids = Bid.where(team_id: team_id)
       signed_up_topics = Bid.where(team_id: team_id).map(&:topic_id)
-      # Remove topics from bids table if the student moves data from Selection table to Topics table
-      # This step is necessary to avoid duplicate priorities in Bids table
       signed_up_topics -= params[:topic].map(&:to_i)
       signed_up_topics.each do |topic|
         Bid.where(topic_id: topic, team_id: team_id).destroy_all
@@ -394,7 +379,7 @@ end
                            rescue StandardError
                              nil
                            end
-          if topic_due_date.nil? # create a new record
+          if topic_due_date.nil? 
             TopicDueDate.create(
               due_at: instance_variable_get('@topic_' + deadline_type + '_due_date'),
               deadline_type_id: deadline_type_id,
@@ -412,7 +397,7 @@ end
               teammate_review_allowed_id: instance_variable_get('@assignment_' + deadline_type + '_due_dates')[i - 1].teammate_review_allowed_id,
               type: 'TopicDueDate'
             )
-          else # update an existed record
+          else 
             topic_due_date.update_attributes(
               due_at: instance_variable_get('@topic_' + deadline_type + '_due_date'),
               submission_allowed_id: instance_variable_get('@assignment_' + deadline_type + '_due_dates')[i - 1].submission_allowed_id,
@@ -428,7 +413,7 @@ end
     redirect_to_assignment_edit(params[:assignment_id])
   end
 
-  # This method is called when a student click on the trumpet icon. So this is a bad method name. --Yang
+  # This method is called when a student click on the trumpet icon.
   def show_team
     assignment = Assignment.find(params[:assignment_id])
     topic = SignUpTopic.find(params[:id])
@@ -445,30 +430,27 @@ end
           @team_members += User.find(teamuser.user_id).name + ' '
         end
       end
-      # @team_members = find_team_members(topic)
     end
   end
 
+  # This method handles the logic for switching a participant's original topic to an approved suggested topic in an assignment.
+  # It ensures the participant's team is reassigned to the new topic and updates the waitlist for the original topic if necessary.
   def switch_original_topic_to_approved_suggested_topic
     assignment = AssignmentParticipant.find(params[:id]).assignment
     team_id = TeamsUser.team_id(assignment.id, session[:user].id)
 
-    # Tmp variable to store topic id before change
     original_topic_id = SignedUpTeam.topic_id(assignment.id.to_i, session[:user].id)
 
-    # Check if this sign up topic exists
     if SignUpTopic.exists?(id: params[:topic_id])
       SignUpTopic.find_by(id: params[:topic_id]).update_attribute(:private_to, nil)
     else
-      # Else flash an error
       flash[:error] = 'Signup topic does not exist.'
     end
 
-    # Change to dynamic finder method to prevent sql injection
     if SignedUpTeam.exists?(team_id: team_id, is_waitlisted: 0)
       SignedUpTeam.where(team_id: team_id, is_waitlisted: 0).first.update_attribute('topic_id', params[:topic_id].to_i)
     end
-    # check the waitlist of original topic. Let the first waitlisted team hold the topic, if exists.
+
     waitlisted_teams = SignedUpTeam.where(topic_id: original_topic_id, is_waitlisted: 1)
     if waitlisted_teams.present?
       waitlisted_first_team_first_user_id = TeamsUser.where(team_id: waitlisted_teams.first.team_id).first.user_id
@@ -477,6 +459,7 @@ end
     redirect_to action: 'list', id: params[:id]
   end
 
+  #Sets the private_to property to nil for a suggested topic which makes it publishable.
   def publish_approved_suggested_topic
     SignUpTopic.find_by(id: params[:topic_id]).update_attribute(:private_to, nil) if SignUpTopic.exists?(id: params[:topic_id])
     redirect_to action: 'list', id: params[:id]
@@ -484,6 +467,8 @@ end
 
   private
 
+  # The `setup_new_topic` method is responsible for creating a new sign-up topic within an assignment.
+  # It sets initial values for the new topic, saves it, and redirects the user to the assignment edit page or re-renders the form if saving fails.
   def setup_new_topic
     set_values_for_new_topic
     @sign_up_topic.micropayment = params[:topic][:micropayment] if @assignment.microtask?
@@ -495,6 +480,9 @@ end
     end
   end
 
+ 
+  # The `update_existing_topic` method updates the attributes of an existing sign-up topic and saves the changes.
+  # After updating, it redirects the user to the sign-up sheet for the corresponding assignment.
   def update_existing_topic(topic)
     topic.topic_identifier = params[:topic][:topic_identifier]
     update_max_choosers(topic)
@@ -504,11 +492,11 @@ end
     redirect_to_sign_up(params[:id])
   end
 
+  # While saving the max choosers you should be careful; if there are users who have signed up for this particular
+  # topic and are on waitlist, then they have to be converted to confirmed topic based on the availability. But if
+  # there are choosers already and if there is an attempt to decrease the max choosers, as of now I am not allowing
+  # it.
   def update_max_choosers(topic)
-    # While saving the max choosers you should be careful; if there are users who have signed up for this particular
-    # topic and are on waitlist, then they have to be converted to confirmed topic based on the availability. But if
-    # there are choosers already and if there is an attempt to decrease the max choosers, as of now I am not allowing
-    # it.
     if SignedUpTeam.find_by(topic_id: topic.id).nil? || topic.max_choosers == params[:topic][:max_choosers]
       topic.max_choosers = params[:topic][:max_choosers]
     elsif topic.max_choosers.to_i < params[:topic][:max_choosers].to_i
@@ -541,15 +529,12 @@ end
     @ad_information
   end
 
+  # Check if the @sign_up_topic record exists (is not nil).
+  # If the @sign_up_topic record exists, reassign the topic for the specified team by calling the `reassign_topic` 
+  # instance method of SignUpTopic.
   def delete_signup_for_topic(topic_id, team_id)
-    # Delete a signup record for a specific topic and team.
-
-    # Find the SignUpTopic record with the specified topic_id using the `find_by` method.
     @sign_up_topic = SignUpTopic.find_by(id: topic_id)
-    # Check if the @sign_up_topic record exists (is not nil).
-    unless @sign_up_topic.nil?
-       # If the @sign_up_topic record exists, reassign the topic for the specified team by calling the `reassign_topic` 
-       # instance method of SignUpTopic.
+    unless @sign_up_topic.nil? 
       @sign_up_topic.reassign_topic(team_id)
     end 
   end
