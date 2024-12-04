@@ -160,7 +160,7 @@ class SignUpSheetController < ApplicationController
     @participants = SignedUpTeam.find_team_participants(assignment_id, session[:ip])
   end
 
-
+  #sets instance variables for use in setup_new_topic
   def set_values_for_new_topic
     @sign_up_topic = SignUpTopic.new
     @sign_up_topic.topic_identifier = params[:topic][:topic_identifier]
@@ -184,6 +184,9 @@ class SignUpSheetController < ApplicationController
     redirect_to controller: 'assignments', action: 'edit', id: assignment_id
   end
 
+
+  #Function which returns a list of topics available to be signed up for in an assignment.
+  #List contains the description of the topic, slots available and the bookmark option if set for the assignment.
   def list
     @participant = AssignmentParticipant.find(params[:id].to_i)
     @assignment = @participant.assignment
@@ -229,6 +232,7 @@ class SignUpSheetController < ApplicationController
     render('sign_up_sheet/intelligent_topic_selection') && return if @assignment.is_intelligent
   end
 
+  #Takes the student to the list page where topic can be signed up for.
   def sign_up
     @assignment = AssignmentParticipant.find(params[:id]).assignment
     @user_id = session[:user].id
@@ -244,7 +248,7 @@ class SignUpSheetController < ApplicationController
   # renamed from signup_as_instructor to select_student_for_signup for better clarity
   def select_student_for_signup; end
 
-
+  #Method that implements 
   def signup_as_instructor_action
   user = User.find_by(name: params[:username])
 
